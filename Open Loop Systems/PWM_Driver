@@ -1,0 +1,99 @@
+#include <msp430.h> 
+
+
+/**
+ * main.c
+ */
+
+
+void PWM_Hardware()
+{
+
+// Fan Setup
+    P1OUT = 0; // Sets P1 output register to 0
+
+    P1SEL |= BIT2;
+    P1DIR |= BIT2; // Top two lines send PWM signal to P1.2 (Fan connection)
+
+  // Timer A0 setup (Fan Control) ////////////////////////////////////////////////////////////////
+
+
+    TA0CCTL1 = OUTMOD_2; // Toggle / Reset output mode
+
+    TA0CCR0 = 999; // With SMCLK, creates a 1 kHz timer frequency
+                      // CCR0 controls frequency of signal
+
+    TA0CCR1 = 500; // 1000/2 // Controls Duty Cycle of signal
+                   // counts needed = Duty cycle * clock rate (SMCLK) divided by frequency of PWM (1 kHz)
+
+    TA0CTL = TACLR;
+    TA0CTL = TASSEL_2 + MC_1 + ID_0;  // Timer is set in up mode mode (SMCLK)
+}
+
+
+void DebounceBt()
+{
+
+// Button Setup //////////////////////////////////////////////////////////////////////////////////
+
+       P2SEL &= ~BIT1; // Makes P1.3 a gpio port (button)
+       P2DIR &= ~BIT1; // configure P1.3 as input
+
+       P2REN |= BIT1;  // Enable Pullup/down Resistor for SW1
+       P2OUT |= BIT1;  // Sets resistor to pull up
+
+       P2IE |= BIT1;   // Enable interrupt for button (P1.3)
+       P2IES |= BIT1;  // P1.3 Hi/Lo edge
+
+       P2IFG &= ~BIT1; // Clears interrupt flag for button press
+
+
+// Timer A0 (Debounce) setup ///////////////////////////////////////////////////////////////////////
+
+       TA1CTL = TASSEL_2 + MC_0 + ID_0 + TACLR; // Sets up Debouncing timer in stop mode
+
+       TA1CCR0 = 2;  // (1000000*.000002) // SMCLK frequency multiplied by the time it takes for bouncing to stop
+                                         // 2us
+       TA1CCTL0 = CCIE; // Capture Compare - Interrupt Enable
+}
+
+
+#pragma vector=PORT2_VECTOR
+__interrupt void Port_2(void) // If interrupt, button press, occurs ...
+    {
+        P2IE &= ~BIT1;  // Disable button interrupt
+        P2IFG &= ~BIT1; // Clear button interrupt flag
+
+        TA1CTL = TASSEL_2 + MC_1 + ID_0; // Start Debouncing
+    }
+
+#pragma vector=TIMER1_A0_VECTOR    // Interrupt sequence for CCR0 register (TimerA1)
+__interrupt void Timer_A1(void)
+{
+      TA1CTL = TASSEL_2 + MC_0 + TACLR;
+
+      P2IE |= BIT1;    // Enables button interrupt
+
+      if(TA0CCR1 > 0){   // Increases duty cycle by 10% after button press
+          TA0CCR1 -= 100;
+      }
+      else {
+          TA0CCR1 = 1000;       // Set the duty cycle to 0%
+      }
+
+      TA1CCTL0 &= ~CCIFG;       // Remove interrupt flag for debouncing
+}
+
+
+int main(void)
+{
+    WDTCTL = WDTPW | WDTHOLD;   // stop watchdog timer
+
+    PWM_Hardware();
+    DebounceBt();
+    __bis_SR_register(CPUOFF + GIE);  // MSP goes in LPM0
+
+    while(1){}
+
+    return 0;
+}
