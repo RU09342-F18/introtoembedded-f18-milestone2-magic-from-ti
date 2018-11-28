@@ -1,0 +1,202 @@
+#include <msp430.h> 
+
+/*
+ * main.c
+ * Author: Ryan Baker and Colby Clark
+ * Date: 11/17/18
+ */
+
+float bitVoltage;
+float voltsPerBit = 3.3 / 4096;
+float Vo;
+
+float Rs = 15000;
+float Vi = 5;
+float Rt;
+
+float slope20_40 = -0.002794;
+float slope40_60 = -0.00704;
+float slope60_80 = -0.0162;
+float intercept20_40 = 54.8924;
+float intercept40_60 = 77.5232;
+float intercept60_80 = 100.356564;
+float temp;
+
+int error;
+int cooldown;
+char space = ' ';
+
+
+
+///////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
+
+void ADCsetup(void)
+{
+   // enable ADC input
+   P6SEL = 0x01;                    // enable A/D channel inputs
+
+   // Magic from TI
+   ADC12CTL0 = ADC12ON+ADC12MSC+ADC12SHT0_8; // Turn on ADC12, extend sampling time to avoid overflow of results
+   ADC12CTL1 = ADC12SHP+ADC12CONSEQ_3+ADC12DIV_7 ;       // Use sampling timer, repeated sequence
+   ADC12MCTL0 = ADC12INCH_0;                 // ref+=AVcc, channel = A0
+   ADC12IE = 0x01;                           // Enable ADC12IFG.1
+   ADC12CTL0 |=     ADC12ENC;                    // Enable conversions
+   ADC12CTL0 |= ADC12SC;                     // Start convn - software trigger
+
+   // enable UART input/output
+   P4SEL |= BIT4 + BIT5;            // P4.4, P4.5 set to TXD, RXD
+
+   // configure UART and set baud rate... (UCA1CTL1)/(UCA1BR0 + UCA1BR1 x 256) = baud rate
+   UCA1CTL1 = UCSWRST;            // initialize USCI
+   UCA1CTL1 |= UCSSEL_2;            // set to use SMCLK (UCSSEL_2)
+   UCA1BR0 = 104;                   // set to 104
+   UCA1BR1 = 0;                     // set to 0
+   UCA1MCTL = UCBRS_1;              // set modulation pattern to high on bit 1 & 5
+   UCA1CTL1 &= ~UCSWRST;            // initialize USCI
+   UCA1IE |= UCRXIE;                // enable USCI_A1 RX interrupt
+   __no_operation();                // for debugger
+}
+
+void P_Control(void)
+{
+    // Control loop for fan PWM
+    // Proportional control
+
+    // Based on the desired regulator temperature, the error is set
+    error = (int)(temp + 0.5) - cooldown;
+
+
+/*
+    if (error < -5)     // Turn fan off if over 5 degrees below desired temp
+        TA0CCR1 = 1000;
+    else if (error < 0) // 10% power if within 5 degrees below desired temp
+        TA0CCR1 = 900;
+    else if (error <= 1)// 10% power if within 5 degrees below desired temp
+        TA0CCR1 = 900;
+    else if (error <= 2) // 25% power if within 5 degrees of above desired temp
+        TA0CCR1 = 700;
+    else if (error <= 4) // 50% power if within 4 degrees above temp
+        TA0CCR1 = 500;
+    else if (error <= 5) // 75% power
+        TA0CCR1 = 250;
+    else if ((error < 10) || (error > 10)) // Max power if at least 5 degrees above temperature
+        TA0CCR1 = 0;
+*/
+
+    if(error > 2)     // Max fanspeed until 5 degree range is reached
+        TA0CCR1 = 0;
+    else if(error <= 2) // Set fanspeed proportional to current temperature
+        TA0CCR1 = -500*error + 1000;
+}
+
+
+#pragma vector=ADC12_VECTOR
+__interrupt void ADC12ISR (void)
+{
+  switch(__even_in_range(ADC12IV,34))
+  {
+  case  0: break;                           // Vector  0:  No interrupt
+  case  2: break;                           // Vector  2:  ADC overflow
+  case  4: break;                           // Vector  4:  ADC timing overflow
+  case  6:                                  // Vector  6:  ADC12IFG0
+
+    bitVoltage = ADC12MEM0; // Three lines calculate thermistor resistance
+    Vo = (bitVoltage * voltsPerBit);
+    Rt = (Rs * Vo) / (Vi - Vo);
+
+ // Calculates temperature according to linearized function
+ // Function is piecewise
+    if(Rt >= 5330)
+        temp = slope20_40*Rt + intercept20_40;
+    else if(2490 <= Rt < 5330)
+        temp = slope40_60*Rt + intercept40_60;
+    else if(Rt < 2490)
+        temp = slope60_80*Rt + intercept60_80;
+
+  // Current temperature is sent over UART in ascii
+  //  UCA1TXBUF = (((int)(temp + 0.5))/10 + 48); // 0.5 is added for rounding and 48 ('0' in asic) converts to asic
+    UCA1TXBUF = (char)(temp + 0.5);
+  //  __delay_cycles(1000);
+  //  UCA1TXBUF = ( (temp + 0.5) - (int)((temp + 0.5)/10)*10 + 48);
+ //   __delay_cycles(1000);
+  //  UCA1TXBUF = space;
+
+  // Fan Controller
+    P_Control();
+
+  case  8: break;                           // Vector  8:  ADC12IFG1
+  case 10: break;                           // Vector 10:  ADC12IFG2
+  case 12: break;                           // Vector 12:  ADC12IFG3
+  case 14: break;                           // Vector 14:  ADC12IFG4
+  case 16: break;                           // Vector 16:  ADC12IFG5
+  case 18: break;                           // Vector 18:  ADC12IFG6
+  case 20: break;                           // Vector 20:  ADC12IFG7
+  case 22: break;                           // Vector 22:  ADC12IFG8
+  case 24: break;                           // Vector 24:  ADC12IFG9
+  case 26: break;                           // Vector 26:  ADC12IFG10
+  case 28: break;                           // Vector 28:  ADC12IFG11
+  case 30: break;                           // Vector 30:  ADC12IFG12
+  case 32: break;                           // Vector 32:  ADC12IFG13
+  case 34: break;                           // Vector 34:  ADC12IFG14
+  default: break;
+  }
+}
+
+
+
+void PWMsetup(void)
+{
+    // Fan Setup
+        P1OUT = 0; // Sets P1 output register to 0
+
+        P1SEL |= BIT2;
+        P1DIR |= BIT2; // Top two lines send PWM signal to P1.2 (Fan connection)
+
+      // Timer A0 setup (Fan Control) ////////////////////////////////////////////////////////////////
+
+
+        TA0CCTL1 = OUTMOD_2; // Toggle / Reset output mode
+
+        TA0CCR0 = 999; // With SMCLK, creates a 1 kHz timer frequency
+                          // CCR0 controls frequency of signal
+
+        TA0CCR1 = 500; // 1000/2 // Controls Duty Cycle of signal
+                       // counts needed = Duty cycle * clock rate (SMCLK) divided by frequency of PWM (1 kHz)
+
+        TA0CTL = TACLR;
+        TA0CTL = TASSEL_2 + MC_1 + ID_0;  // Timer is set in up mode mode (SMCLK)
+}
+
+
+#pragma vector=USCI_A1_VECTOR
+__interrupt void Temp_control(void)
+{
+  switch(__even_in_range(UCA1IV,4))
+  {
+  case 0:break;                             // Vector 0 - no interrupt
+  case 2:                                   // Vector 2 - RXIFG
+    cooldown = UCA1RXBUF;
+    break;
+  case 4:break;                             // Vector 4 - TXIFG
+  default: break;
+  }
+}
+
+
+int main(void)
+{
+    WDTCTL = WDTPW | WDTHOLD;   // watchdog timer stopped by enabling bit 7 (WDTHOLD) and using
+                                // the password (WDTPW)
+    error = 0;
+    cooldown = 50;
+
+    ADCsetup();
+    PWMsetup();
+    __bis_SR_register(CPUOFF + GIE);  // MSP goes in LPM0
+
+    while(1){}
+
+    return 0;
+}
